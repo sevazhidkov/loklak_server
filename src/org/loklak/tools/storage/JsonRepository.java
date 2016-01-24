@@ -25,7 +25,6 @@ import java.io.FileInputStream;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Date;
 import java.util.Locale;
@@ -35,6 +34,7 @@ import java.util.TimeZone;
 import java.util.TreeSet;
 import java.util.zip.GZIPInputStream;
 
+import org.loklak.data.DAO;
 import org.loklak.tools.Compression;
 import org.loklak.tools.UTF8;
 import org.loklak.tools.json.JSONObject;
@@ -62,7 +62,7 @@ public class JsonRepository {
     final Mode mode;
     final int concurrency;
     
-    public JsonRepository(File dump_dir, String dump_file_prefix, String readme, final Mode mode, final int concurrency) throws IOException {
+    public JsonRepository(File dump_dir, String dump_file_prefix, String readme, final Mode mode, final boolean dailyDump, final int concurrency) throws IOException {
         this.dump_dir = dump_dir;
         this.dump_file_prefix = dump_file_prefix;
         this.dump_dir_own = new File(this.dump_dir, "own");
@@ -82,17 +82,17 @@ public class JsonRepository {
                 w.close();
             }
         }
-        this.json_log = new JsonRandomAccessFile(getCurrentDump(dump_dir_own, this.dump_file_prefix, mode), this.concurrency);
+        this.json_log = new JsonRandomAccessFile(getCurrentDump(dump_dir_own, this.dump_file_prefix, mode, dailyDump), this.concurrency);
     }
     
     public Mode getMode() {
         return this.mode;
     }
     
-    private static File getCurrentDump(File path, String prefix, final Mode mode) {
-        SimpleDateFormat formatYearMonth = new SimpleDateFormat("yyyyMM", Locale.US);
-        formatYearMonth.setTimeZone(TimeZone.getTimeZone("GMT"));
-        String currentDatePart = formatYearMonth.format(new Date());
+    private static File getCurrentDump(File path, String prefix, final Mode mode, final boolean dailyDump) {
+        SimpleDateFormat dateFomat = new SimpleDateFormat(dailyDump ? "yyyyMMdd" : "yyyyMM", Locale.US);
+        dateFomat.setTimeZone(TimeZone.getTimeZone("GMT"));
+        String currentDatePart = dateFomat.format(new Date());
         
         // if there is already a dump, use it
         String[] existingDumps = path.list();
@@ -110,11 +110,17 @@ public class JsonRepository {
                         final File source = new File(path, d);
                         final File dest = new File(path, d + ".gz");
                         if (dest.exists()) dest.delete();
-                        try {
-                            Compression.gzip(source, dest, true);
-                        } catch (IOException e) {
-                            e.printStackTrace();
-                        }
+                        new Thread() {
+                            public void run() {
+                                try {
+                                    DAO.log("starting gzip of " + source);
+                                    Compression.gzip(source, dest, true);
+                                    DAO.log("finished gzip of " + source);
+                                } catch (IOException e) {
+                                    DAO.log("gzip of " + source + " failed: " + e.getMessage());
+                                }
+                            }
+                        }.start();
                     }
                 } else {
                     // all files should be uncompressed to enable random-access mode
@@ -194,44 +200,47 @@ public class JsonRepository {
         return dumps;
     }
 
-    private boolean shiftProcessedDump(String dumpName) {
+    /**
+     * move a file from the import directory to the imported directory.
+     * @param dumpName only the name, not the full path. The file must be in the import file path
+     * @return true if the file was shifted successfully, false if file did not exist or cannot be moved
+     */
+    public boolean shiftProcessedDump(String dumpName) {
         File f = new File(this.dump_dir_import, dumpName);
         if (!f.exists()) return false;
         File g = new File(this.dump_dir_imported, dumpName);
         if (g.exists()) g.delete();
         return f.renameTo(g);
     }
-
-    public void shiftProcessedDumps() {
-        for (File f: this.getImportDumps()) shiftProcessedDump(f.getName());
-    }
-
-    public Collection<JsonReader> getOwnDumpReaders(boolean startReader) throws IOException {
-        return getDumpReaders(this.getOwnDumps(), this.concurrency, startReader);
-    }
     
-    public Collection<JsonReader> getImportDumpReaders(boolean startReader) throws IOException {
-        return getDumpReaders(this.getImportDumps(), this.concurrency, startReader);
-    }
-
-    private Collection<JsonReader> getDumpReaders(Collection<File> dumps, int concurrency, boolean startReaders) throws IOException {
-        Collection<JsonReader> reader = new ArrayList<>(dumps == null || dumps.size() == 0 ? 0 : dumps.size());
-        if (dumps == null || dumps.size() == 0) return reader;
-        for (File dump: dumps) {
-            if (dump.getName().endsWith(".gz")) {
-                assert this.mode == COMPRESSED_MODE;
-                reader.add(new JsonStreamReader(new GZIPInputStream(new FileInputStream(dump)), dump.getAbsolutePath(), concurrency));
-            } else if (dump.getName().endsWith(".txt")) {
-                // no assert for the mode here because both mode would be valid
-                final JsonRandomAccessFile r = new JsonRandomAccessFile(dump, concurrency);
-                if (startReaders) {
-                    final Thread readerThread = new Thread(r);
-                    readerThread.start();
-                }
-                reader.add(r);
-            }
+    /**
+     * create a concurrent dump reader for the given file. The reader is either a JsonStreamReader if the
+     * dump file is gzipped or a JsonRandomAccessFile if the file is a plain txt file. Both reader types
+     * must be started as concurrent process which this method does on it's own. The reader process dies
+     * automatically when the file is read completely. When the reader thread dies, it pushed several 
+     * JsonReader.POISON_JSON_MAP objects to the reading queue, according to the concurrency defined with the
+     * initializer of this class.
+     * @param dump file
+     * @return a concurrent JsonReader with started Thread wrapper
+     * @throws IOException
+     */
+    public JsonReader getDumpReader(File dump) throws IOException {
+        if (dump == null || !dump.exists()) throw new IOException("dump file " + dump + " does not exist");
+        if (dump.getName().endsWith(".gz")) {
+            assert this.mode == COMPRESSED_MODE;
+            JsonStreamReader r = new JsonStreamReader(new GZIPInputStream(new FileInputStream(dump)), dump.getAbsolutePath(), this.concurrency);
+            final Thread readerThread = new Thread(r);
+            readerThread.start();
+            return r;
         }
-        return reader;
+        if (dump.getName().endsWith(".txt")) {
+            // no assert for the mode here because both mode would be valid
+            final JsonRandomAccessFile r = new JsonRandomAccessFile(dump, this.concurrency);
+            final Thread readerThread = new Thread(r);
+            readerThread.start();
+            return r;
+        }
+        throw new IOException("wrong file extension: must be txt or gz");
     }
     
 }

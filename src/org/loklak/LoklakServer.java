@@ -57,6 +57,7 @@ import org.eclipse.jetty.util.log.Log;
 import org.eclipse.jetty.util.thread.ExecutorThreadPool;
 import org.eclipse.jetty.webapp.WebAppContext;
 import org.loklak.api.server.AccessServlet;
+import org.loklak.api.server.AppsServlet;
 import org.loklak.api.server.AssetServlet;
 import org.loklak.api.server.CampaignServlet;
 import org.loklak.api.server.CrawlerServlet;
@@ -96,6 +97,8 @@ public class LoklakServer {
     
     private static Server server = null;
     private static Caretaker caretaker = null;
+    public  static QueuedIndexing queuedIndexing = null;
+    private static DumpImporter dumpImporter = null;
     
     public static Map<String, String> readConfig(Path data) throws IOException {
         File conf_dir = new File("conf");
@@ -183,7 +186,7 @@ public class LoklakServer {
         
         
         LinkedBlockingQueue<Runnable> queue = new LinkedBlockingQueue<Runnable>(300);
-        ExecutorThreadPool pool = new ExecutorThreadPool(10, 100, 10000, TimeUnit.MILLISECONDS, queue);;
+        ExecutorThreadPool pool = new ExecutorThreadPool(10, 20, 2000, TimeUnit.MILLISECONDS, queue);;
         LoklakServer.server = new Server(pool);
         LoklakServer.server.setStopAtShutdown(true);
         ServerConnector connector = new ServerConnector(LoklakServer.server);
@@ -219,6 +222,7 @@ public class LoklakServer {
         servletHandler.addServlet(AccessServlet.class, "/api/access.json");
         servletHandler.addServlet(AccessServlet.class, "/api/access.html");
         servletHandler.addServlet(AccessServlet.class, "/api/access.txt");
+        servletHandler.addServlet(AppsServlet.class, "/api/apps.json");
         servletHandler.addServlet(HelloServlet.class, "/api/hello.json");
         servletHandler.addServlet(PeersServlet.class, "/api/peers.json");
         servletHandler.addServlet(CrawlerServlet.class, "/api/crawler.json");
@@ -294,6 +298,11 @@ public class LoklakServer {
         LoklakServer.server.start();
         LoklakServer.caretaker = new Caretaker();
         LoklakServer.caretaker.start();
+        LoklakServer.queuedIndexing = new QueuedIndexing();
+        LoklakServer.queuedIndexing.start();
+        LoklakServer.dumpImporter = new DumpImporter();
+        LoklakServer.dumpImporter.start();
+        
         
         // read upgrade interval
         Caretaker.upgradeTime = Caretaker.startupTime + DAO.getConfig("upgradeInterval", 86400000);
@@ -308,8 +317,10 @@ public class LoklakServer {
             public void run() {
                 try {
                     Log.getLog().info("catched main termination signal");
-                    LoklakServer.server.stop();
+                    LoklakServer.dumpImporter.shutdown();
+                    LoklakServer.queuedIndexing.shutdown();
                     LoklakServer.caretaker.shutdown();
+                    LoklakServer.server.stop();
                     DAO.close();
                     TwitterScraper.executor.shutdown();
                     Harvester.executor.shutdown();

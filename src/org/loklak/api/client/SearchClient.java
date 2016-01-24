@@ -20,17 +20,15 @@
 package org.loklak.api.client;
 
 import java.io.IOException;
-import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
-import java.util.List;
-import java.util.Map;
 
-import org.loklak.data.DAO;
-import org.loklak.data.ProviderType;
 import org.loklak.data.Timeline;
 import org.loklak.data.MessageEntry;
 import org.loklak.data.UserEntry;
 import org.loklak.http.ClientConnection;
+import org.loklak.tools.UTF8;
+import org.loklak.tools.json.JSONArray;
+import org.loklak.tools.json.JSONObject;
 
 public class SearchClient {
 
@@ -43,32 +41,33 @@ public class SearchClient {
         String urlstring = "";
         try {
             urlstring = protocolhostportstub + "/api/search.json?q=" + URLEncoder.encode(query.replace(' ', '+'), "UTF-8") + "&timezoneOffset=" + timezoneOffset + "&maximumRecords=" + count + "&source=" + (source == null ? "all" : source) + "&minified=true&timeout=" + timeout;
-        } catch (UnsupportedEncodingException e1) {
-            return tl;
-        }
-        byte[] json = ClientConnection.download(urlstring);
-        if (json == null || json.length == 0) return tl;
-        Map<String, Object> map = DAO.jsonMapper.readValue(json, DAO.jsonTypeRef);
-        Object statuses_obj = map.get("statuses");
-        @SuppressWarnings("unchecked") List<Map<String, Object>> statuses = statuses_obj instanceof List<?> ? (List<Map<String, Object>>) statuses_obj : null;
-        if (statuses != null) {
-            for (Map<String, Object> tweet: statuses) {
-                @SuppressWarnings("unchecked") Map<String, Object> user = (Map<String, Object>) tweet.remove("user");
-                if (user == null) continue;
-                tweet.put("provider_type", (Object) ProviderType.REMOTE.name());
-                tweet.put("provider_hash", provider_hash);
-                UserEntry u = new UserEntry(user);
-                MessageEntry t = new MessageEntry(tweet);
-                tl.add(t, u);
+            byte[] jsonb = ClientConnection.download(urlstring);
+            if (jsonb == null || jsonb.length == 0) throw new IOException("empty content from " + protocolhostportstub);
+            String jsons = UTF8.String(jsonb);
+            JSONObject json = new JSONObject(jsons);
+            if (json == null || json.length() == 0) return tl;
+            JSONArray statuses = json.getJSONArray("statuses");
+            if (statuses != null) {
+                for (int i = 0; i < statuses.length(); i++) {
+                    JSONObject tweet = statuses.getJSONObject(i);
+                    JSONObject user = tweet.getJSONObject("user");
+                    if (user == null) continue;
+                    tweet.remove("user");
+                    UserEntry u = new UserEntry(user);
+                    MessageEntry t = new MessageEntry(tweet);
+                    tl.add(t, u);
+                }
             }
-        }
-        Object metadata_obj = map.get("search_metadata");
-        @SuppressWarnings("unchecked") Map<String, Object> metadata = metadata_obj instanceof Map<?,?> ? (Map<String, Object>) metadata_obj : null;
-        if (metadata != null) {
-            Integer hits = (Integer) metadata.get("hits");
-            if (hits != null) tl.setHits(hits.intValue());
-            String scraperInfo = (String) metadata.get("scraperInfo");
-            if (scraperInfo != null) tl.setScraperInfo(scraperInfo);
+            JSONObject metadata = json.getJSONObject("search_metadata");
+            if (metadata != null) {
+                Integer hits = metadata.has("hits") ? (Integer) metadata.get("hits") : null;
+                if (hits != null) tl.setHits(hits.intValue());
+                String scraperInfo = metadata.has("scraperInfo") ? (String) metadata.get("scraperInfo") : null;
+                if (scraperInfo != null) tl.setScraperInfo(scraperInfo);
+            }
+        } catch (Throwable e) {
+            e.printStackTrace();
+            throw new IOException(e.getMessage());
         }
         //System.out.println(parser.text());
         return tl;

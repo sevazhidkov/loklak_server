@@ -1,0 +1,17 @@
+{
+  "@context":"http://schema.org",
+  "@type":"SoftwareApplication",
+  "name":"histogram",
+  "headline":"loklak tweets histogram",
+  "alternativeHeadline":"work from GCI task",
+  "applicationCategory":"Tweets analytics",
+  "applicationSubCategory":"About project",
+  "operatingSystem":"http://loklak.org",
+  "author":{
+    "@type":"Person",
+    "name":"Seva Zhidkov",
+    "email":"zhidkovseva@gmail.com",
+    "url":"https://github.com/sevazhidkov",
+    "sameAs":"https://github.com/sevazhidkov"
+  }
+}

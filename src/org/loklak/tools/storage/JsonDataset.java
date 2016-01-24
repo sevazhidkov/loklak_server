@@ -68,11 +68,11 @@ public class JsonDataset {
             File dump_dir, String dump_file_prefix,
             Column[] columns,
             String dateFieldName, String dateFieldFormat,
-            JsonRepository.Mode mode) throws IOException {
+            JsonRepository.Mode mode, final boolean dailyDump) throws IOException {
         
         // initialize class objects
         int concurrency = Runtime.getRuntime().availableProcessors();
-        this.indexDump = new JsonRepository(dump_dir, dump_file_prefix, null, mode, concurrency);
+        this.indexDump = new JsonRepository(dump_dir, dump_file_prefix, null, mode, dailyDump, concurrency);
         this.index = new ConcurrentHashMap<>();
         this.minifier = new JsonMinifier();
         this.columns = new HashMap<>();
@@ -84,12 +84,12 @@ public class JsonDataset {
         for (Column col: columns) this.index.put(col.key, new JsonFactoryIndex());
 
         // start reading of the JsonDump
-        final Collection<JsonReader> readers = indexDump.getOwnDumpReaders(true);
+        final Collection<File> dumps = indexDump.getOwnDumps();
 
         // for each reader one threqd is started which does Json parsing and indexing
-        if (readers != null) for (final JsonReader reader: readers) {
+        if (dumps != null) for (final File dump: dumps) {
+            final JsonReader reader = indexDump.getDumpReader(dump);
             DAO.log("loading " + reader.getName());
-            (new Thread(reader)).start();
             Thread[] indexerThreads = new Thread[concurrency];
             for (int i = 0; i < concurrency; i++) {
                 indexerThreads[i] = new Thread() {
@@ -232,7 +232,7 @@ public class JsonDataset {
     
         public void test() throws IOException {
             for (JsonRepository.Mode mode: JsonRepository.Mode.values()) try {
-                JsonDataset dtst = new JsonDataset(this.testFile, "idx_", new Column[]{new Column("abc", true), new Column("def", false)}, null, null, mode);
+                JsonDataset dtst = new JsonDataset(this.testFile, "idx_", new Column[]{new Column("abc", true), new Column("def", false)}, null, null, mode, false);
                 
                 Map<String,  Object> map = new HashMap<>();
                 map.put("abc", 1);
@@ -243,7 +243,7 @@ public class JsonDataset {
                 
                 dtst.close();
 
-                dtst = new JsonDataset(this.testFile, "idx_", new Column[]{new Column("abc", true), new Column("def", false)}, null, null, mode);
+                dtst = new JsonDataset(this.testFile, "idx_", new Column[]{new Column("abc", true), new Column("def", false)}, null, null, mode, false);
                 JsonFactoryIndex idx = dtst.index.get("abc");
                 System.out.println(idx.get(1));
                 idx = dtst.index.get("def");
